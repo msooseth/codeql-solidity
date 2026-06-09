@@ -61,7 +61,7 @@ codeql database analyze my-db "$PWD/queries" \
   --additional-packs="$PWD"
 ```
 
-### Example
+## Example: Vault.sol
 
 Let's put this contract under `contracts/Vault.sol`:
 ```solidity
