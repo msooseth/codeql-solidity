@@ -119,8 +119,8 @@ codeql database create vault-db --language=solidity \
     --source-root=contracts --search-path="$PWD"
 ```
 
-That extracts **82 `.sol` files** (Uniswap V2 + V3 core, plus the `Vault.sol`
-example). The queries below live in [`queries/analysis/`](queries/analysis/); run
+That extracts **81 `.sol` files** (Uniswap V2 + V3 core). The queries below live
+in [`queries/analysis/`](queries/analysis/); run
 one with `codeql query run queries/analysis/<name>.ql --database=vault-db
 --additional-packs="$PWD"`.
 
@@ -132,34 +132,31 @@ one with `codeql query run queries/analysis/<name>.ql --database=vault-db
 ### `FloatingPragma.ql` — unpinned compiler versions
 
 Flags `pragma solidity` directives that float: a caret/tilde, or an open-ended
-lower bound (`>=`) with no upper bound. **30 of 85 pragmas** are flagged:
+lower bound (`>=`) with no upper bound. **29 of 84 pragmas** are flagged:
 
 | Constraint          | Files | Example                                     |
 |---------------------|------:|---------------------------------------------|
 | `>=0.5.0`           |    25 | `interfaces/IUniswapV3Pool.sol:2`           |
 | `>=0.4.0`           |     2 | V3 libs `FixedPoint96.sol`, `FixedPoint128.sol` |
 | `>=0.6.0`/`>=0.7.0` |     2 | V3 libs `TransferHelper.sol`, `LowGasSafeMath.sol` |
-| `^0.8.0`            |     1 | `Vault.sol:2`                               |
 
 The interesting finding is the **split between interface/library files and the
-implementation contracts**: the open-ended `>=` pragmas are all in `interfaces/`
-and `libraries/`, while every core implementation contract pins an *exact*
-version — `UniswapV2Pair.sol` uses `=0.5.16`, `UniswapV3Pool.sol` uses `=0.7.6` —
-and is correctly **not** flagged. Five files that use a bounded range
-(`>=0.5.0 <0.8.0`) are also correctly ignored. The lone caret is our own
-`Vault.sol`.
+implementation contracts**: the flagged open-ended `>=` pragmas are all in
+`interfaces/` and `libraries/`, while every core implementation contract pins an
+*exact* version — `UniswapV2Pair.sol` uses `=0.5.16`, `UniswapV3Pool.sol` uses
+`=0.7.6` — and is correctly **not** flagged. Five files that use a bounded range
+(`>=0.5.0 <0.8.0`) are also correctly ignored.
 
 ### `RequireWithoutReason.ql` — reverts with no message
 
-Flags `require(condition)` calls with no reason-string argument. **108 of 163**
+Flags `require(condition)` calls with no reason-string argument. **107 of 162**
 `require` calls have no message. Broken down by area:
 
-| Area        | with reason | bare (no reason) |
-|-------------|------------:|-----------------:|
-| V2 core     |          21 |                0 |
-| V3 core     |          25 |               38 |
-| V3 tests    |           9 |               69 |
-| `Vault.sol` |           0 |                1 |
+| Area     | with reason | bare (no reason) |
+|----------|------------:|-----------------:|
+| V2 core  |          21 |                0 |
+| V3 core  |          25 |               38 |
+| V3 tests |           9 |               69 |
 
 This cleanly captures a real **stylistic difference between the two codebases**:
 Uniswap V2 always supplies a namespaced reason string (e.g.
@@ -182,16 +179,16 @@ production — a clean bill of health that the query confirms.
 This grammar wraps every expression in a generic `expression` node, so a call's
 `function` field (`CallExpression.getFunction()`) returns that wrapper; the real
 callee is one level down (`getFunction().getAChild()`). This query classifies all
-**1126 call expressions** by that inner callee kind:
+**1124 call expressions** by that inner callee kind:
 
-| Inner callee node  | Count | Example              |
-|--------------------|------:|----------------------|
-| `Identifier`       |   606 | `require(x)`, `foo(x)` |
-| `MemberExpression` |   487 | `a.b(x)` → callee `b` |
-| `NewExpression`    |    30 | `new Foo(x)`          |
-| `StructExpression` |     3 | `S({...})`            |
+| Inner callee node  | Count | Example                  |
+|--------------------|------:|--------------------------|
+| `Identifier`       |   605 | `require(x)`, `foo(x)`    |
+| `MemberExpression` |   487 | `a.b(x)` → callee `b`     |
+| `NewExpression`    |    30 | `new Foo(x)`             |
+| `StructExpression` |     2 | `new T{salt: …}()` deploy |
 
-Every call has a resolvable callee (606 + 487 + 30 + 3 = 1126) — the call→callee
+Every call has a resolvable callee (605 + 487 + 30 + 2 = 1124) — the call→callee
 link is complete; the only subtlety is unwrapping the `expression` wrapper, which
 is why a naïve callee lookup that only matches a direct `Identifier` would silently
 miss the 487 member calls. The library's
