@@ -80,7 +80,7 @@ contract Vault {
 }
 ```
 
-Then run:
+Then run this to parse the code:
 
 ```bash
 codeql database create vault-db --language=solidity \
@@ -120,8 +120,8 @@ codeql database create vault-db --language=solidity \
 ```
 
 That extracts **82 `.sol` files** (Uniswap V2 + V3 core, plus the `Vault.sol`
-example). The queries below live in [`queries/custom/`](queries/custom/); run one
-with `codeql query run queries/custom/<name>.ql --database=vault-db
+example). The queries below live in [`queries/analysis/`](queries/analysis/); run
+one with `codeql query run queries/analysis/<name>.ql --database=vault-db
 --additional-packs="$PWD"`.
 
 > Note: a freshly created database has no `*.dbscheme.stats`, which the query
@@ -177,14 +177,34 @@ property harness under `test/`, `echidna/`, `crytic/`, or `audits/`. In other
 words, Uniswap reserves `assert` for fuzzing invariants and uses `require` in
 production — a clean bill of health that the query confirms.
 
+### `CalleeKinds.ql` — how calls resolve to their target
+
+This grammar wraps every expression in a generic `expression` node, so a call's
+`function` field (`CallExpression.getFunction()`) returns that wrapper; the real
+callee is one level down (`getFunction().getAChild()`). This query classifies all
+**1126 call expressions** by that inner callee kind:
+
+| Inner callee node  | Count | Example              |
+|--------------------|------:|----------------------|
+| `Identifier`       |   606 | `require(x)`, `foo(x)` |
+| `MemberExpression` |   487 | `a.b(x)` → callee `b` |
+| `NewExpression`    |    30 | `new Foo(x)`          |
+| `StructExpression` |     3 | `S({...})`            |
+
+Every call has a resolvable callee (606 + 487 + 30 + 3 = 1126) — the call→callee
+link is complete; the only subtlety is unwrapping the `expression` wrapper, which
+is why a naïve callee lookup that only matches a direct `Identifier` would silently
+miss the 487 member calls. The library's
+[`CallResolution.qll`](ql/lib/codeql/solidity/callgraph/CallResolution.qll) handles
+this with `getFunction().getAChild*()`.
+
 ## Project structure
 
 ```
 extractor/       Rust extractor (tree-sitter based)
 ql/lib/          QL library — pack lucasamorimca/solidity-all
 queries/         Security queries — pack lucasamorimca/solidity-queries
-  analysis/      Built-in analysis & security checks
-  custom/        Example lints (see "Example: Uniswap" above)
+  analysis/      Analysis & security checks (incl. the "Example: Uniswap" queries)
 extractor-pack/  CodeQL extractor config + tools
 tests/           Test fixtures
 ```

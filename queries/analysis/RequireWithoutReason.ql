@@ -7,7 +7,8 @@
  * @problem.severity recommendation
  * @precision high
  * @id solidity/require-without-reason
- * @tags maintainability
+ * @tags analysis
+ *       maintainability
  *       error-handling
  *       solidity
  */

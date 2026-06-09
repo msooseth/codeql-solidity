@@ -9,7 +9,8 @@
  * @problem.severity recommendation
  * @precision medium
  * @id solidity/assert-in-production
- * @tags maintainability
+ * @tags analysis
+ *       maintainability
  *       error-handling
  *       solidity
  */

@@ -9,7 +9,8 @@
  * @problem.severity warning
  * @precision high
  * @id solidity/floating-pragma
- * @tags maintainability
+ * @tags analysis
+ *       maintainability
  *       security
  *       solidity
  *       reproducible-builds
