@@ -63,9 +63,8 @@ codeql database analyze my-db "$PWD/queries" \
 
 ### Example
 
-```bash
-mkdir contracts
-cat > contracts/Vault.sol <<'SOL'
+Let's put this contract under `contracts/Vault.sol`:
+```solidity
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 contract Vault {
@@ -79,8 +78,11 @@ contract Vault {
         balances[msg.sender] = 0;
     }
 }
-SOL
+```
 
+Then run:
+
+```bash
 codeql database create vault-db --language=solidity \
     --source-root=contracts --search-path="$PWD"
 ```
