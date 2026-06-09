@@ -186,6 +186,14 @@ impl Extractor {
         let mut cursor = node.walk();
 
         for (child_index, child) in node.children(&mut cursor).enumerate() {
+            // Collapse generic `expression` wrapper nodes: the tree-sitter grammar
+            // wraps every expression in an `expression` choice node, so e.g.
+            // `call_expression.function` points at a wrapper rather than the real
+            // callee. Skip the wrapper and attach its inner node directly, keeping
+            // the wrapper's position (`child_index`) and field name so parent/field
+            // relations point at the real expression. See `resolve_wrapper`.
+            let child = resolve_wrapper(child);
+
             // Extract the child
             let child_label =
                 self.extract_node(child, source, Some((parent_label.clone(), child_index)))?;
@@ -260,6 +268,31 @@ impl Extractor {
         );
         Ok(())
     }
+}
+
+/// Holds if `node` is a transparent single-child wrapper that should be
+/// collapsed during extraction.
+///
+/// The pinned tree-sitter-solidity grammar exposes `expression` as a visible
+/// choice rule (it is not a tree-sitter supertype), so every expression sits
+/// inside a generic `expression` node with exactly one child. That wrapper
+/// carries no information of its own and breaks naive AST queries
+/// (`getFunction()`, `getLeft()`, argument access, ...), so we drop it and
+/// promote its child. Only the `expression` kind is collapsed, and only when it
+/// has exactly one child, so re-parenting cannot collide on `#keyset[parent,
+/// index]`.
+fn is_collapsible_wrapper(node: &Node) -> bool {
+    node.is_named() && node.kind() == "expression" && node.child_count() == 1
+}
+
+/// Follows a chain of collapsible wrappers down to the first meaningful node.
+fn resolve_wrapper(node: Node) -> Node {
+    let mut current = node;
+    while is_collapsible_wrapper(&current) {
+        // Safe: `is_collapsible_wrapper` guarantees exactly one child.
+        current = current.child(0).expect("wrapper guaranteed to have one child");
+    }
+    current
 }
 
 /// Normalize a tree-sitter kind name for use in table names.

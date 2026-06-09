@@ -38,5 +38,8 @@ Thumbs.db
 .opencode/
 plans/
 AGENTS.md
-CLAUDE.md
 release-manifest.json
+
+# Example corpus (cloned third-party repos) and generated databases
+/contracts/
+/vault-db/
