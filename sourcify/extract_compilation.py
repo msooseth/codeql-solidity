@@ -82,9 +82,14 @@ def main():
           f"{len(sources_files)} sources shard(s).")
 
     # 1. Across all compiled shards, collect rows whose compilation_id starts
-    #    with the given prefix.
+    #    with the given prefix. Skip files that aren't compiled-sources shards
+    #    (e.g. a stray sources_*.parquet caught by a loose glob).
     matched = []
     for f in compiled_files:
+        names = set(pq.read_schema(f).names)
+        if not {"compilation_id", "source_hash", "path"} <= names:
+            print(f"  skip (not a compiled-sources shard): {os.path.basename(f)}")
+            continue
         t = pq.read_table(f, columns=["compilation_id", "source_hash", "path"])
         t = t.filter(pc.starts_with(t["compilation_id"], args.compilation_id))
         if t.num_rows:
@@ -105,6 +110,12 @@ def main():
     needed = set(bytes(h) for h in cs["source_hash"].to_pylist())
     content_by_hash = {}
     for f in sources_files:
+        # Skip files that aren't sources shards (e.g. the compiled-sources
+        # parquet caught by a loose glob like *sources*.parquet).
+        names = set(pq.read_schema(f).names)
+        if not {"source_hash", "content"} <= names:
+            print(f"  skip (not a sources shard): {os.path.basename(f)}")
+            continue
         src = pq.read_table(f, columns=["source_hash", "content"])
         for h, c in zip(src["source_hash"].to_pylist(), src["content"].to_pylist()):
             hb = bytes(h)
