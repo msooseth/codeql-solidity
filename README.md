@@ -1,4 +1,5 @@
 # CodeQL Solidity
+Originally by @lucasamorimca, see https://github.com/lucasamorimca/codeql-solidity
 
 [![Test](https://github.com/lucasamorimca/codeql-solidity/actions/workflows/test.yml/badge.svg)](https://github.com/lucasamorimca/codeql-solidity/actions/workflows/test.yml)
 [![Build](https://github.com/lucasamorimca/codeql-solidity/actions/workflows/build.yml/badge.svg)](https://github.com/lucasamorimca/codeql-solidity/actions/workflows/build.yml)
@@ -7,10 +8,6 @@
 A CodeQL extractor and query pack for analyzing Solidity smart contracts:
 tree-sitter parsing, dataflow/taint tracking, and call-graph & inheritance
 analysis.
-
-The packs are not published to a CodeQL registry, so build from this repo and
-reference them locally. The steps below work on any Linux x86_64 host; only the
-CodeQL CLI install (step 1) is Arch-specific.
 
 ## Setup
 
