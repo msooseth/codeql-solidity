@@ -4,6 +4,12 @@ Non-obvious things learned working in this repo. The README covers setup/usage a
 the Uniswap example; this file is the gotchas that bite you when **writing queries
 and touching the extractor/library**. (This file is gitignored.)
 
+## Git workflow
+
+- **Never create a branch to commit.** Commit directly to `main`. Do not branch
+  "first" before committing, do not open PRs unless explicitly asked. When the
+  user says "commit", commit to whatever branch is checked out (normally `main`).
+
 ## Layout & packs
 
 - `ql/lib/` → pack **`lucasamorimca/solidity-all`** (library). `queries/` → pack
