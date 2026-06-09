@@ -23,6 +23,7 @@ Usage:
 import argparse
 import glob
 import os
+import re
 import sys
 
 import pyarrow as pa
@@ -33,6 +34,42 @@ import pyarrow.compute as pc
 # automatically without changing the command line.
 DEFAULT_COMPILED = ["compiled_contracts_sources/*.parquet"]
 DEFAULT_SOURCES = ["sources/*.parquet"]
+
+
+def safe_join(base, *parts):
+    """Join `parts` under `base`, guaranteeing the result stays inside `base`.
+
+    Sourcify `path` values are arbitrary compiler-input paths: they may be
+    absolute (`/Users/.../Foo.sol`), contain `..`, Windows drive letters, or a
+    leading slash. We split every part on both slash kinds and drop anything
+    that could escape — empty / `.` / `..` components and bare drive letters —
+    so the output can never land outside `base`. A final realpath containment
+    check is belt-and-suspenders.
+
+    Returns the absolute path on success, or None if (after sanitizing) nothing
+    is left to write, or the result would somehow still escape `base`.
+    """
+    base = os.path.abspath(base)
+    cleaned = []
+    for part in parts:
+        for comp in re.split(r"[\\/]+", part):
+            comp = comp.strip()
+            if comp in ("", ".", ".."):
+                continue
+            if re.fullmatch(r"[A-Za-z]:", comp):  # drop Windows drive (e.g. "C:")
+                continue
+            # strip any character that has no business in a path segment
+            comp = comp.replace("\x00", "")
+            cleaned.append(comp)
+    if not cleaned:
+        return None
+    full = os.path.abspath(os.path.join(base, *cleaned))
+    # Containment check against the real (symlink-resolved) base.
+    real_base = os.path.realpath(base)
+    real_full = os.path.realpath(full)
+    if real_full != real_base and os.path.commonpath([real_base, real_full]) != real_base:
+        return None
+    return full
 
 
 def resolve_files(patterns, base):
@@ -124,27 +161,36 @@ def main():
         if len(content_by_hash) == len(needed):
             break  # found everything; no need to scan further shards
 
-    # 3. Write each matched file.
+    # 3. Write each matched file. The output root is always resolved against
+    #    the current working directory; every file is written through
+    #    safe_join() so a malicious/absolute `path` can never escape it.
+    out_root = os.path.abspath(args.outdir)
     written = 0
     missing = 0
+    unsafe = 0
     for cid, h, path in zip(cs["compilation_id"].to_pylist(),
                             cs["source_hash"].to_pylist(),
                             cs["path"].to_pylist()):
         content = content_by_hash.get(bytes(h))
-        full = os.path.join(args.outdir, cid, path)
         if content is None:
             print(f"  MISSING content (hash {bytes(h).hex()}): {path}")
             missing += 1
             continue
+        full = safe_join(out_root, cid, path)
+        if full is None:
+            print(f"  SKIP unsafe path (would escape {out_root}): {path!r}")
+            unsafe += 1
+            continue
         os.makedirs(os.path.dirname(full), exist_ok=True)
         with open(full, "w") as fh:
             fh.write(content)
-        print(f"  wrote {full} ({len(content)} bytes)")
+        # show the path relative to the output root for readability
+        print(f"  wrote {os.path.relpath(full, out_root)} ({len(content)} bytes)")
         written += 1
 
     print(f"\nDone: {written} written, {missing} missing content "
-          f"(hash not found in any sources shard).")
-    if missing:
+          f"(hash not found in any sources shard), {unsafe} skipped (unsafe path).")
+    if missing or unsafe:
         sys.exit(1)
 
 
