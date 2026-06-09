@@ -1,0 +1,105 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # CodeQL CLI version to test against. Bump alongside extractor releases.
+  CODEQL_VERSION: v2.25.6
+
+jobs:
+  build-and-test:
+    name: Build extractor & smoke-test pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: extractor
+
+      - name: Build extractor (release)
+        run: cargo build --release
+        working-directory: extractor
+
+      - name: Install CodeQL CLI ${{ env.CODEQL_VERSION }}
+        run: |
+          gh release download "$CODEQL_VERSION" \
+            --repo github/codeql-cli-binaries \
+            --pattern "codeql-linux64.zip" --dir /tmp
+          unzip -q /tmp/codeql-linux64.zip -d /opt
+          echo "/opt/codeql" >> "$GITHUB_PATH"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Install extractor binary into extractor-pack
+        run: |
+          BIN="$PWD/target/release/codeql-extractor-solidity"
+          T=extractor-pack/tools
+          # index-files.sh looks here:
+          install -m755 "$BIN" "$T/codeql-extractor-solidity"
+          # autobuild.sh looks here (Linux x64):
+          install -D -m755 "$BIN" "$T/linux64/extractor"
+
+      - name: Generate dbscheme & QL library
+        # These are .gitignore'd build artifacts, so they must be produced here
+        # before any query can compile or any database can be finalized.
+        run: |
+          ./target/release/codeql-extractor-solidity generate \
+            --dbscheme ql/lib/solidity.dbscheme \
+            --library ql/lib/codeql/solidity/ast/internal/TreeSitter.qll
+          cp ql/lib/solidity.dbscheme extractor-pack/solidity.dbscheme
+
+      - name: Prepare sample contract
+        run: |
+          mkdir -p sample-src
+          cat > sample-src/Vault.sol <<'SOL'
+          // SPDX-License-Identifier: MIT
+          pragma solidity ^0.8.0;
+          contract Vault {
+              mapping(address => uint) public balances;
+              function withdraw() public {
+                  uint amount = balances[msg.sender];
+                  (bool ok, ) = msg.sender.call{value: amount}("");
+                  require(ok);
+                  balances[msg.sender] = 0;
+              }
+          }
+          SOL
+
+      - name: Create CodeQL database
+        env:
+          CODEQL_EXTRACTOR_SOLIDITY_ROOT: ${{ github.workspace }}/extractor-pack
+        run: |
+          codeql database create sample-db \
+            --language=solidity \
+            --source-root=sample-src \
+            --search-path="$PWD"
+
+      - name: Analyze with query pack
+        env:
+          CODEQL_EXTRACTOR_SOLIDITY_ROOT: ${{ github.workspace }}/extractor-pack
+        run: |
+          codeql database analyze sample-db "$PWD/queries" \
+            --format=sarif-latest \
+            --output=results.sarif \
+            --additional-packs="$PWD" \
+            --threads=0
+
+      - name: Upload SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sample-results-sarif
+          path: results.sarif
+          if-no-files-found: warn
