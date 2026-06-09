@@ -50,10 +50,6 @@ cp ql/lib/solidity.dbscheme extractor-pack/solidity.dbscheme
 export CODEQL_EXTRACTOR_SOLIDITY_ROOT="$PWD/extractor-pack"
 ```
 
-Prefer not to build the extractor? Download a prebuilt binary from
-[Releases](https://github.com/lucasamorimca/codeql-solidity/releases) and place
-it as above — but you still need step 3's `generate` to produce the QL library.
-
 ## Usage
 
 Build a database from your contracts, then run the queries against it. Pass
