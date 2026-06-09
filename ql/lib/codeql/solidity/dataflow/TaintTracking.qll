@@ -13,6 +13,48 @@ module TaintTracking {
   private import codeql.solidity.dataflow.DataFlow
 
   /**
+   * Holds if `call` is a member call `obj.prop(...)`, binding the underlying
+   * `member` expression and its property name `prop`.
+   *
+   * `CallExpression.getFunction()` always returns a generic `Expression` wrapper
+   * (never the callee directly), so the real `MemberExpression` is reached via
+   * `getAChild*()`, and the property name is read with `getValue()` (its
+   * `toString()` yields the QL class name, not the source text).
+   */
+  private predicate memberCall(
+    Solidity::CallExpression call, Solidity::MemberExpression member, string prop
+  ) {
+    member = call.getFunction().getAChild*() and
+    prop = member.getProperty().(Solidity::AstNode).getValue()
+  }
+
+  /**
+   * Gets the resolved callee name of `call`, unwrapping the `Expression` wrapper
+   * for both plain `f(x)` and member `a.b(x)` calls.
+   */
+  private string calleeName(Solidity::CallExpression call) {
+    result = call.getFunction().getAChild*().(Solidity::Identifier).getValue()
+    or
+    result =
+      call.getFunction().getAChild*().(Solidity::MemberExpression).getProperty().(Solidity::AstNode).getValue()
+  }
+
+  /**
+   * Gets the value expression of an argument to `call`.
+   *
+   * Arguments are `CallArgument` nodes that each wrap their real expression in a
+   * generic `Expression` node, so the value sits two levels down.
+   * (`CallExpression.getChild(i)` is unpopulated and cannot be used.)
+   */
+  private Solidity::AstNode callArgValue(Solidity::CallExpression call) {
+    exists(Solidity::CallArgument arg, Solidity::AstNode wrapper |
+      arg.getParent() = call and
+      wrapper.getParent() = arg and
+      result.getParent() = wrapper
+    )
+  }
+
+  /**
    * A taint tracking configuration.
    *
    * Extend this class to define custom taint tracking analyses.
@@ -175,15 +217,9 @@ module TaintTracking {
       Solidity::CallExpression call;
 
       ExternalCallTargetSink() {
-        exists(Solidity::MemberExpression member |
-          member = call.getFunction() and
-          (
-            member.getProperty().(Solidity::AstNode).toString() = "call" or
-            member.getProperty().(Solidity::AstNode).toString() = "delegatecall" or
-            member.getProperty().(Solidity::AstNode).toString() = "staticcall" or
-            member.getProperty().(Solidity::AstNode).toString() = "transfer" or
-            member.getProperty().(Solidity::AstNode).toString() = "send"
-          ) and
+        exists(Solidity::MemberExpression member, string prop |
+          memberCall(call, member, prop) and
+          prop in ["call", "delegatecall", "staticcall", "transfer", "send"] and
           this.asExpr() = member.getObject()
         )
       }
@@ -199,14 +235,10 @@ module TaintTracking {
       Solidity::CallExpression call;
 
       CallDataSink() {
-        exists(Solidity::MemberExpression member |
-          member = call.getFunction() and
-          (
-            member.getProperty().(Solidity::AstNode).toString() = "call" or
-            member.getProperty().(Solidity::AstNode).toString() = "delegatecall" or
-            member.getProperty().(Solidity::AstNode).toString() = "staticcall"
-          ) and
-          this.asExpr() = call.getChild(0)
+        exists(Solidity::MemberExpression member, string prop |
+          memberCall(call, member, prop) and
+          prop in ["call", "delegatecall", "staticcall"] and
+          this.asExpr() = callArgValue(call)
         )
       }
 
@@ -220,8 +252,8 @@ module TaintTracking {
     class SelfdestructSink extends DataFlow::Node {
       SelfdestructSink() {
         exists(Solidity::CallExpression call |
-          call.getFunction().(Solidity::Identifier).toString() = "selfdestruct" and
-          this.asExpr() = call.getChild(0)
+          calleeName(call) = "selfdestruct" and
+          this.asExpr() = callArgValue(call)
         )
       }
     }
@@ -231,14 +263,12 @@ module TaintTracking {
      */
     class EtherTransferAmountSink extends DataFlow::Node {
       EtherTransferAmountSink() {
-        // transfer(amount) or send(amount)
-        exists(Solidity::CallExpression call, Solidity::MemberExpression member |
-          member = call.getFunction() and
-          (
-            member.getProperty().(Solidity::AstNode).toString() = "transfer" or
-            member.getProperty().(Solidity::AstNode).toString() = "send"
-          ) and
-          this.asExpr() = call.getChild(0)
+        // transfer(amount) / send(amount). For ERC20 `token.transfer(to, amount)`
+        // this also covers the recipient argument, which is acceptable for a sink.
+        exists(Solidity::CallExpression call, Solidity::MemberExpression member, string prop |
+          memberCall(call, member, prop) and
+          prop in ["transfer", "send"] and
+          this.asExpr() = callArgValue(call)
         )
         // Note: .call{value: amount} pattern requires NamedArgument type support
       }
@@ -249,8 +279,10 @@ module TaintTracking {
      */
     class ArrayIndexSink extends DataFlow::Node {
       ArrayIndexSink() {
+        // `getChild(1)` is a bracket token; the index expression is wrapped under
+        // `getIndex()`, so descend one level to the real expression.
         exists(Solidity::ArrayAccess access |
-          this.asExpr() = access.getChild(1) // the index expression
+          this.asExpr().getParent() = access.getIndex()
         )
       }
     }
@@ -260,12 +292,17 @@ module TaintTracking {
      */
     class StorageWriteSink extends DataFlow::Node {
       StorageWriteSink() {
-        exists(Solidity::AssignmentExpression assign, Solidity::StateVariableDeclaration decl |
-          exists(Solidity::Identifier id |
-            id = assign.getLeft() and
-            id.toString() = decl.getName().(Solidity::AstNode).toString()
-          ) and
-          this.asExpr() = assign.getRight()
+        // Assignment operands are wrapped in generic `Expression` nodes: the LHS
+        // identifier is reached via `getAChild*()` and the RHS value is the direct
+        // child of the right wrapper. Names compare with `getValue()`, not
+        // `toString()` (which yields the QL class name).
+        exists(
+          Solidity::AssignmentExpression assign, Solidity::StateVariableDeclaration decl,
+          Solidity::Identifier id
+        |
+          id = assign.getLeft().getAChild*() and
+          id.getValue() = decl.getName().(Solidity::AstNode).getValue() and
+          this.asExpr().getParent() = assign.getRight()
         )
       }
     }
@@ -276,14 +313,14 @@ module TaintTracking {
     class CriticalStateModificationSink extends DataFlow::Node {
       CriticalStateModificationSink() {
         exists(Solidity::AssignmentExpression assign, Solidity::Identifier id |
-          id = assign.getLeft() and
-          this.asExpr() = assign.getRight() and
+          id = assign.getLeft().getAChild*() and
+          this.asExpr().getParent() = assign.getRight() and
           // Look for common critical variable names
           (
-            id.toString().toLowerCase().matches("%owner%") or
-            id.toString().toLowerCase().matches("%admin%") or
-            id.toString().toLowerCase().matches("%balance%") or
-            id.toString().toLowerCase().matches("%allowance%")
+            id.getValue().toLowerCase().matches("%owner%") or
+            id.getValue().toLowerCase().matches("%admin%") or
+            id.getValue().toLowerCase().matches("%balance%") or
+            id.getValue().toLowerCase().matches("%allowance%")
           )
         )
       }
@@ -300,11 +337,8 @@ module TaintTracking {
     class RequireCheckSanitizer extends DataFlow::Node {
       RequireCheckSanitizer() {
         exists(Solidity::CallExpression call |
-          (
-            call.getFunction().(Solidity::Identifier).toString() = "require" or
-            call.getFunction().(Solidity::Identifier).toString() = "assert"
-          ) and
-          this.asExpr() = call.getChild(0)
+          calleeName(call) in ["require", "assert"] and
+          this.asExpr() = callArgValue(call)
         )
       }
     }
@@ -314,28 +348,28 @@ module TaintTracking {
      */
     class OwnerCheckSanitizer extends DataFlow::Node {
       OwnerCheckSanitizer() {
+        // Binary operands are wrapped in generic `Expression` nodes (reach them via
+        // `getAChild*()`), and operator/property/identifier text is read with
+        // `getValue()` rather than `toString()`.
         exists(Solidity::BinaryExpression cmp |
-          (
-            cmp.getOperator().toString() = "==" or
-            cmp.getOperator().toString() = "!="
-          ) and
+          cmp.getOperator().(Solidity::AstNode).getValue() in ["==", "!="] and
           this.asExpr() = cmp and
           (
             // msg.sender == owner pattern
             exists(Solidity::MemberExpression member, Solidity::Identifier id |
-              member = cmp.getLeft() and
-              member.getObject().(Solidity::Identifier).toString() = "msg" and
-              member.getProperty().(Solidity::AstNode).toString() = "sender" and
-              id = cmp.getRight() and
-              id.toString().toLowerCase().matches("%owner%")
+              member = cmp.getLeft().getAChild*() and
+              member.getObject().(Solidity::Identifier).getValue() = "msg" and
+              member.getProperty().(Solidity::AstNode).getValue() = "sender" and
+              id = cmp.getRight().getAChild*() and
+              id.getValue().toLowerCase().matches("%owner%")
             )
             or
             exists(Solidity::MemberExpression member, Solidity::Identifier id |
-              id = cmp.getLeft() and
-              id.toString().toLowerCase().matches("%owner%") and
-              member = cmp.getRight() and
-              member.getObject().(Solidity::Identifier).toString() = "msg" and
-              member.getProperty().(Solidity::AstNode).toString() = "sender"
+              id = cmp.getLeft().getAChild*() and
+              id.getValue().toLowerCase().matches("%owner%") and
+              member = cmp.getRight().getAChild*() and
+              member.getObject().(Solidity::Identifier).getValue() = "msg" and
+              member.getProperty().(Solidity::AstNode).getValue() = "sender"
             )
           )
         )
@@ -348,15 +382,10 @@ module TaintTracking {
     class BoundsCheckSanitizer extends DataFlow::Node {
       BoundsCheckSanitizer() {
         exists(Solidity::CallExpression req, Solidity::BinaryExpression cmp |
-          req.getFunction().(Solidity::Identifier).toString() = "require" and
-          cmp = req.getChild(0) and
-          (
-            cmp.getOperator().toString() = "<" or
-            cmp.getOperator().toString() = "<=" or
-            cmp.getOperator().toString() = ">" or
-            cmp.getOperator().toString() = ">="
-          ) and
-          this.asExpr() = cmp.getLeft()
+          calleeName(req) = "require" and
+          cmp = callArgValue(req) and
+          cmp.getOperator().(Solidity::AstNode).getValue() in ["<", "<=", ">", ">="] and
+          this.asExpr().getParent() = cmp.getLeft()
         )
       }
     }
@@ -366,7 +395,13 @@ module TaintTracking {
      */
     class ReentrancyGuardSanitizer extends DataFlow::Node {
       ReentrancyGuardSanitizer() {
-        // Check for modifier that looks like a reentrancy guard
+        // NOTE: still under-specified. `this` is left unbound and `mod.toString()`
+        // yields the QL class name (so this currently matches nothing). A correct
+        // version would need to (a) read the modifier name via `getValue()` — note
+        // Uniswap names its guard `lock`, not `nonReentrant` — and (b) decide which
+        // nodes a reentrancy guard should actually sanitize. Binding every
+        // expression in a guarded function would suppress all taint flow through it,
+        // which is too aggressive; this needs a deliberate design decision.
         exists(Solidity::ModifierInvocation mod |
           mod.toString().toLowerCase().matches("%nonreentrant%") or
           mod.toString().toLowerCase().matches("%reentrancyguard%")

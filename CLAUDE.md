@@ -92,14 +92,30 @@ counts against a known corpus before relying on them.
 
 - Fixed on this branch: `FunctionDef.getVisibility()` / `isView` / `isPure` /
   `isPayable` (all returned empty due to the wrapper bug).
-- Still suspect: `dataflow/TaintTracking.qll` and `callgraph/ExternalCalls.qll`
-  match `call.getFunction()` directly against `MemberExpression`, but
-  `getFunction() instanceof MemberExpression` is **0** (it's always the wrapper),
-  so their low-level-call / `.transfer` / `.send` sink detection likely under-fires.
-  The `ExternalCall` heuristic found only ~3 calls across all of Uniswap; the
-  wrapper-aware pattern (`getFunction().getAChild*()` + property in
-  `call/delegatecall/staticcall/transfer/send`) finds 10. Don't treat
-  `ExternalCall` as complete.
+- Fixed on this branch: `dataflow/TaintTracking.qll`. All sinks/sanitizers
+  previously returned **0** from three stacked bugs: (1) `member =
+  call.getFunction()` matched the wrapper, not the `MemberExpression`
+  (→ `getFunction().getAChild*()`); (2) `.getProperty()...toString()` /
+  `Identifier.toString()` return the **QL class name**, not source text
+  (→ `.getValue()`); (3) argument access via `call.getChild(0)` is dead and
+  operands are wrapped (→ unwrap `CallArgument → Expression → expr`; descend
+  operand wrappers). Now firing on Uniswap (ExternalCallTargetSink 9, CallDataSink
+  5, EtherTransferAmountSink 10, StorageWriteSink 154, RequireCheckSanitizer 368,
+  BoundsCheckSanitizer 85, etc.). `ReentrancyGuardSanitizer` left as-is — separate
+  bug (unbound `this`; needs a design decision), documented inline.
+- `callgraph/ExternalCalls.qll` is actually **fine** — it already uses the
+  wrapper-aware `getFunction().getAChild*()` + `getValue()` pattern (`ExternalCall`
+  = 123, `isLowLevelCall`/`isEtherTransfer` = 5 each on Uniswap). The earlier
+  "~3 calls" reading was stale.
+- Root cause of dead `getChild(i)`: codegen (`extractor/src/codegen/mod.rs`
+  `generate_child_accessor`) emits per-type `getChild` **overrides** backed by
+  `solidity_<kind>_child` relations that the extractor (`extractor.rs`) never
+  populates — only `solidity_ast_node_parent` + fields. The override shadows the
+  working base `AstNode.getChild` (which uses the parent relation), so `getChild(i)`
+  is dead for overridden types (CallExpression, CallArgument, …) but works for
+  non-overridden ones (ArrayAccess). Use `getAChild()`/`getAFieldOrChild()` or the
+  typed field accessors instead. (Deliberately not fixed in Rust — repo convention
+  is QL-layer wrapper handling.)
 - When unsure, model directly on raw `TreeSitter` following
   `queries/analysis/FunctionList.ql`, which has verified-working
   visibility/mutability/state-access patterns.
