@@ -102,7 +102,7 @@ Swap in `queries/analysis/ReentrancyPatterns.ql` (or any file under
 `queries/analysis/`) to run a specific check, or use `database analyze` above to
 run the whole pack into SARIF.
 
-## Example: Uniswap
+## Example: Uniswap v2 & v3
 
 To exercise the pack against real-world code, clone the Uniswap core
 repositories into `contracts/` and build a database over the lot. The extractor
