@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""Extract the Solidity source files for a Sourcify compilation.
+
+Joins two sets of parquet files:
+  - compiled_contracts_sources_*.parquet : (compilation_id, source_hash, path)
+  - sources_*.parquet                    : (source_hash, content)
+
+Given a compilation_id (or just a prefix of one), finds every matching
+compilation and writes each of its source files to disk under
+<outdir>/<compilation_id>/<path>.
+
+Both --compiled and --sources accept multiple paths and/or glob patterns, so a
+compilation whose rows or source contents are spread across several parquet
+shards is handled: all shards are scanned and the join spans them.
+
+Usage:
+  ./extract_compilation.py e47e45b1-05e9-45d4-b8a6
+  ./extract_compilation.py e47e45b1 \
+      --compiled 'compiled_contracts_sources_*.parquet' \
+      --sources  'sources_*.parquet'
+  ./extract_compilation.py e47e45b1 --sources sources_0_10000.parquet sources_10000_20000.parquet
+"""
+import argparse
+import glob
+import os
+import sys
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pyarrow.compute as pc
+
+# Defaults are glob patterns so newly-downloaded shards are picked up
+# automatically without changing the command line.
+DEFAULT_COMPILED = ["compiled_contracts_sources_*.parquet"]
+DEFAULT_SOURCES = ["sources_*.parquet"]
+
+
+def resolve_files(patterns, base):
+    """Expand a list of paths/globs (relative to `base`) into concrete files."""
+    files = []
+    for pat in patterns:
+        p = pat if os.path.isabs(pat) else os.path.join(base, pat)
+        hits = sorted(glob.glob(p))
+        if hits:
+            files.extend(hits)
+        elif os.path.exists(p):
+            files.append(p)
+    # de-dup while preserving order
+    seen = set()
+    out = []
+    for f in files:
+        if f not in seen:
+            seen.add(f)
+            out.append(f)
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("compilation_id",
+                    help="full compilation_id or a leading prefix of one")
+    ap.add_argument("--compiled", nargs="+", default=DEFAULT_COMPILED,
+                    help="compiled_contracts_sources parquet file(s)/glob(s) "
+                         "(default: %(default)s)")
+    ap.add_argument("--sources", nargs="+", default=DEFAULT_SOURCES,
+                    help="sources parquet file(s)/glob(s) (default: %(default)s)")
+    ap.add_argument("--outdir", default="extracted",
+                    help="output directory (default: %(default)s)")
+    args = ap.parse_args()
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    compiled_files = resolve_files(args.compiled, here)
+    sources_files = resolve_files(args.sources, here)
+
+    if not compiled_files:
+        sys.exit(f"No compiled parquet files matched: {args.compiled}")
+    if not sources_files:
+        sys.exit(f"No sources parquet files matched: {args.sources}")
+
+    print(f"Scanning {len(compiled_files)} compiled shard(s), "
+          f"{len(sources_files)} sources shard(s).")
+
+    # 1. Across all compiled shards, collect rows whose compilation_id starts
+    #    with the given prefix.
+    matched = []
+    for f in compiled_files:
+        t = pq.read_table(f, columns=["compilation_id", "source_hash", "path"])
+        t = t.filter(pc.starts_with(t["compilation_id"], args.compilation_id))
+        if t.num_rows:
+            matched.append(t)
+    if not matched:
+        sys.exit(f"No compilation_id matching prefix {args.compilation_id!r} "
+                 f"found in any compiled shard.")
+    cs = pa.concat_tables(matched)
+
+    matched_cids = pc.unique(cs["compilation_id"]).to_pylist()
+    print(f"Matched {len(matched_cids)} compilation_id(s), {cs.num_rows} source file(s):")
+    for c in matched_cids:
+        print(f"  {c}")
+
+    # 2. Build a source_hash -> content lookup, but only for the hashes we
+    #    actually need, scanning every sources shard. (Avoids holding all
+    #    contents in memory when shards are large.)
+    needed = set(bytes(h) for h in cs["source_hash"].to_pylist())
+    content_by_hash = {}
+    for f in sources_files:
+        src = pq.read_table(f, columns=["source_hash", "content"])
+        for h, c in zip(src["source_hash"].to_pylist(), src["content"].to_pylist()):
+            hb = bytes(h)
+            if hb in needed and hb not in content_by_hash:
+                content_by_hash[hb] = c
+        if len(content_by_hash) == len(needed):
+            break  # found everything; no need to scan further shards
+
+    # 3. Write each matched file.
+    written = 0
+    missing = 0
+    for cid, h, path in zip(cs["compilation_id"].to_pylist(),
+                            cs["source_hash"].to_pylist(),
+                            cs["path"].to_pylist()):
+        content = content_by_hash.get(bytes(h))
+        full = os.path.join(args.outdir, cid, path)
+        if content is None:
+            print(f"  MISSING content (hash {bytes(h).hex()}): {path}")
+            missing += 1
+            continue
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w") as fh:
+            fh.write(content)
+        print(f"  wrote {full} ({len(content)} bytes)")
+        written += 1
+
+    print(f"\nDone: {written} written, {missing} missing content "
+          f"(hash not found in any sources shard).")
+    if missing:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
