@@ -22,10 +22,6 @@ pikaur -S codeql-cli-bin
 codeql --version
 ```
 
-On other systems, grab `codeql-linux64.zip` from
-[`github/codeql-cli-binaries`](https://github.com/github/codeql-cli-binaries/releases)
-and put the extracted `codeql` directory on your `PATH`.
-
 **2. Install Rust** (≥ 1.82): `sudo pacman -S --needed rust` (or `rustup`).
 
 **3. Build the extractor and generate the schema.** The dbscheme, QL library,
@@ -79,14 +75,17 @@ contract Vault {
     mapping(address => uint) public balances;
     function withdraw() public {
         uint amount = balances[msg.sender];
-        (bool ok, ) = msg.sender.call{value: amount}("");   // external call before state update
+
+        // external call before state update
+        (bool ok, ) = msg.sender.call{value: amount}("");
         require(ok);
         balances[msg.sender] = 0;
     }
 }
 SOL
 
-codeql database create vault-db --language=solidity --source-root=contracts --search-path="$PWD"
+codeql database create vault-db --language=solidity \
+    --source-root=contracts --search-path="$PWD"
 ```
 
 Run a single query interactively to see results as a table:
