@@ -14,24 +14,26 @@ CodeQL extractor and queries for Solidity smart contract security analysis.
 
 ## Installation
 
-### Download CodeQL Packs
+Build from this repo and reference the packs locally — see
+[Setup on Arch Linux (from source)](#setup-on-arch-linux-from-source) below
+(the steps are the same on any Linux x86_64 host; only the CLI install in
+step 1 is Arch-specific).
 
-```bash
-codeql pack download lucasamorimca/solidity-all
-codeql pack download lucasamorimca/solidity-queries
-```
-
-### Download Extractor
-
-Download from [Releases](https://github.com/lucasamorimca/codeql-solidity/releases)
-
-> **Note:** The `codeql pack download` commands above only work if these packs
-> have been published to a CodeQL package registry you can reach. They are
-> **not** on the public `ghcr.io` registry, so a plain `codeql pack download`
-> (or `codeql pack install lucasamorimca/solidity-all`) will fail with
-> *"not found in the registry"* / *"path does not exist"*. Until the packs are
-> published, build from this repo and reference the packs locally — see
-> [Setup on Arch Linux (from source)](#setup-on-arch-linux-from-source) below.
+> **Not yet available: registry install.** These packs are **not** published to
+> a CodeQL package registry, so the following do **not** work today — they fail
+> with *"not found in the registry"* (`pack download`) or *"path does not
+> exist"* (`pack install <name>`, which treats its argument as a local path):
+>
+> ```bash
+> # Does NOT work — packs are unpublished
+> codeql pack download lucasamorimca/solidity-all
+> codeql pack download lucasamorimca/solidity-queries
+> ```
+>
+> The prebuilt extractor binaries on the
+> [Releases](https://github.com/lucasamorimca/codeql-solidity/releases) page are
+> real and can be downloaded instead of building the Rust extractor yourself
+> (step 3 below), but the QL packs still have to come from this repo.
 
 ## Setup on Arch Linux (from source)
 
