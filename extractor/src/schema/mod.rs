@@ -108,6 +108,9 @@ fn generate_dbscheme(node_types: &[NodeType]) -> String {
     // Generate token info table
     schema.push_str(&generate_token_tables());
 
+    // Generate folded constant-value table
+    schema.push_str(&generate_const_value_tables());
+
     schema
 }
 
@@ -301,6 +304,25 @@ fn generate_token_tables() -> String {
 solidity_tokeninfo(
     unique int id: @solidity_ast_node ref,
     int kind: int ref,
+    string value: string ref
+);
+
+"#
+    .to_string()
+}
+
+/// Generate the folded constant-value table.
+fn generate_const_value_tables() -> String {
+    r#"// ============================================================
+// Folded Constant Values
+// ============================================================
+
+// Compile-time integer value of a constant expression, as a canonical decimal
+// string (may be negative). Values can exceed 64 bits (e.g. a `layout at` slot
+// base near 2**256), so they are stored as strings rather than ints. Only
+// emitted for expressions the extractor can fold from literals.
+solidity_const_value(
+    unique int node: @solidity_ast_node ref,
     string value: string ref
 );
 

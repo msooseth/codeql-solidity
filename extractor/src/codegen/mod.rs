@@ -168,6 +168,17 @@ fn generate_base_class() -> String {
             solidity_tokeninfo(this, _, result)
         }
 
+        /**
+         * Gets the folded compile-time integer value of this expression, as a
+         * canonical decimal string, if it is a constant literal-arithmetic
+         * expression. Values may exceed 64 bits (e.g. a `layout at` slot base near
+         * 2**256), hence the string representation. Use `BigIntComparison` (in the
+         * AST library) to compare such values numerically.
+         */
+        string getConstantValue() {
+            solidity_const_value(this, result)
+        }
+
         /** Gets the parent of this node, if any */
         AstNode getParent() {
             solidity_ast_node_parent(this, result, _)

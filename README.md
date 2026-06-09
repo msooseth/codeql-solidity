@@ -194,6 +194,33 @@ would still miss the 487 member calls, so resolution must handle both the
 `Identifier` and `MemberExpression` cases (see the library's
 [`CallResolution.qll`](ql/lib/codeql/solidity/callgraph/CallResolution.qll)).
 
+### `HighLayoutWithInheritance.ql` — high storage-layout base in an inheriting contract
+
+Flags a contract that both inherits (`is Base`) and pins its storage layout to a
+high slot base via `layout at <expr>` (>= `2**256 - 2**64`):
+
+```solidity
+contract D is A, C layout at 2**256 - 2**64 {}   // flagged
+```
+
+The slot base is a 256-bit constant — `2**256 - 2**64` does not fit in any native
+integer, so the value cannot be computed in QL. To support this the **extractor
+folds constant integer expressions during extraction** and emits them as the
+`solidity_const_value` relation: a canonical decimal string, exposed in QL as
+`AstNode.getConstantValue()`. The folder
+([`extractor/src/extraction/constfold.rs`](extractor/src/extraction/constfold.rs))
+evaluates literal arithmetic — decimal/hex/scientific literals and number units,
+`+ - * / % ** << >> & | ^ ~` and unary `-`, with parentheses — using
+arbitrary-precision integers. The query then just reads the folded value and
+compares it to the threshold with `BigIntComparison` (numeric comparison of
+decimal strings, in [`ql/lib/codeql/solidity/ast/Constants.qll`](ql/lib/codeql/solidity/ast/Constants.qll)).
+
+This handles forms a syntactic match would miss — `(1 << 256) - (1 << 64)`,
+`2**255 * 2`, hex `0xFFF…`, etc. all fold to the same value. It does **not**
+resolve named `constant`/`immutable` variables (`layout at HIGH_SLOT`); that
+needs cross-declaration symbol resolution and is left as future work — such
+expressions simply yield no folded value rather than a wrong one.
+
 ## Project structure
 
 ```

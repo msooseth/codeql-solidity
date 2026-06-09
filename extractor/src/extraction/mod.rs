@@ -6,6 +6,7 @@
 //! - AST traversal and TRAP generation
 //! - Source archive management
 
+mod constfold;
 mod extractor;
 
 use anyhow::{Context, Result};

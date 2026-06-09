@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tree_sitter::{Node, Parser, Tree};
 
+use crate::extraction::constfold;
 use crate::trap::{Compression, Label, TrapValue, TrapWriter};
 
 /// Extractor for a single Solidity file.
@@ -167,6 +168,14 @@ impl Extractor {
             self.emit_token_info(&label, kind_id as u32, text)?;
         }
 
+        // Emit the folded constant value for literal arithmetic expressions, so
+        // queries can compare values (e.g. a `layout at <expr>` slot base) without
+        // re-implementing 256-bit arithmetic in QL. `node` is already the
+        // wrapper-resolved node, so `label` is exactly what queries observe.
+        if let Some(value) = constfold::fold(node, source) {
+            self.emit_const_value(&label, &value.to_string())?;
+        }
+
         // Process all children and emit field relationships
         self.extract_children_and_fields(&label, node, source)?;
 
@@ -263,6 +272,18 @@ impl Extractor {
             vec![
                 TrapValue::Label(label.clone()),
                 TrapValue::UInt(kind as u64),
+                TrapValue::String(value.to_string()),
+            ],
+        );
+        Ok(())
+    }
+
+    /// Emit the folded constant value of an expression node, as a decimal string.
+    fn emit_const_value(&mut self, label: &Label, value: &str) -> Result<()> {
+        self.trap.emit(
+            "solidity_const_value",
+            vec![
+                TrapValue::Label(label.clone()),
                 TrapValue::String(value.to_string()),
             ],
         );
