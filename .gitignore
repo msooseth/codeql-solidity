@@ -43,3 +43,7 @@ release-manifest.json
 # Example corpus (cloned third-party repos) and generated databases
 /contracts/
 /vault-db/
+
+# Sourcify parquet exports (large data, downloaded via sourcify/download_parquet.py)
+*.parquet
+*.parquet.part
