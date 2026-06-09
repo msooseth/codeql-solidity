@@ -31,8 +31,8 @@ import pyarrow.compute as pc
 
 # Defaults are glob patterns so newly-downloaded shards are picked up
 # automatically without changing the command line.
-DEFAULT_COMPILED = ["compiled_contracts_sources_*.parquet"]
-DEFAULT_SOURCES = ["sources_*.parquet"]
+DEFAULT_COMPILED = ["compiled_contracts_sources/*.parquet"]
+DEFAULT_SOURCES = ["sources/*.parquet"]
 
 
 def resolve_files(patterns, base):
