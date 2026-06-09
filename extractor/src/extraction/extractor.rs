@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use tracing::warn;
 use tree_sitter::{Node, Parser, Tree};
 
 use crate::extraction::constfold;
@@ -18,6 +19,9 @@ pub struct Extractor {
     trap: TrapWriter,
     /// File label in the database
     file_label: Option<Label>,
+    /// Count of tree-sitter ERROR/MISSING nodes dropped during this file's
+    /// extraction (i.e. the file did not parse cleanly under the grammar).
+    error_nodes_dropped: usize,
 }
 
 impl Extractor {
@@ -27,6 +31,7 @@ impl Extractor {
             file_path: file_path.to_string(),
             trap: TrapWriter::new(file_path),
             file_label: None,
+            error_nodes_dropped: 0,
         }
     }
 
@@ -52,6 +57,15 @@ impl Extractor {
 
         // Extract AST
         self.extract_tree(&tree, source)?;
+
+        // Surface files that did not parse cleanly: their ERROR/MISSING subtrees
+        // were dropped, so extraction is partial for this file.
+        if self.error_nodes_dropped > 0 {
+            warn!(
+                "{}: dropped {} unparseable AST node(s) (ERROR/MISSING); extraction is partial",
+                self.file_path, self.error_nodes_dropped
+            );
+        }
 
         Ok(())
     }
@@ -202,6 +216,19 @@ impl Extractor {
             // the wrapper's position (`child_index`) and field name so parent/field
             // relations point at the real expression. See `resolve_wrapper`.
             let child = resolve_wrapper(child);
+
+            // Tree-sitter inserts synthetic ERROR / zero-width MISSING nodes when a
+            // file does not parse cleanly. Their kind is "ERROR", which has no
+            // `solidity_error_def` relation in the dbscheme (the dbscheme is
+            // generated from the grammar's node-types.json, which does not list the
+            // synthetic ERROR node), so emitting them aborts the whole TRAP import.
+            // Drop the error subtree — the rest of the file still extracts. Skipping
+            // here (rather than inside `extract_node`) means no label is created and
+            // no parent/field relation points at a dropped node.
+            if child.is_error() || child.is_missing() {
+                self.error_nodes_dropped += 1;
+                continue;
+            }
 
             // Extract the child
             let child_label =
