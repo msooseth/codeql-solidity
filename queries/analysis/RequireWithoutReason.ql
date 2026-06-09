@@ -17,7 +17,7 @@ import codeql.solidity.ast.internal.TreeSitter
 
 /** Gets the callee name of a call expression (the identifier in its function position). */
 string calleeName(Solidity::CallExpression c) {
-  exists(Solidity::Identifier id | id.getParent() = c.getFunction() | result = id.getValue())
+  result = c.getFunction().(Solidity::Identifier).getValue()
 }
 
 /** Gets the number of arguments passed to call `c`. */

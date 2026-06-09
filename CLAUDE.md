@@ -55,67 +55,84 @@ and touching the extractor/library**. (This file is gitignored.)
 - QL `select` can't take inline `(if ...) + (if ...)`; factor into a string-valued
   predicate. `limit N` is not valid in `query run` scripts.
 
-## AST shape: the `expression` (and other) wrapper nodes
+## AST shape: the `expression` wrapper is now collapsed in the extractor
 
-This is the #1 source of "my query matches nothing." The grammar wraps things in
-generic nodes; the real content is a **child**.
+The grammar exposes `expression` as a visible choice rule, so every expression
+*used* to sit inside a generic `expression` wrapper node (the #1 source of "my
+query matches nothing"). **The extractor now collapses that wrapper**
+(`is_collapsible_wrapper`/`resolve_wrapper` in `extractor/src/extraction/extractor.rs`),
+re-parenting the inner node directly. So after re-extraction:
 
-- **`CallExpression.getFunction()` returns a generic `Expression` wrapper for all
-  calls** (verified 1124/1124), never the callee directly. The real callee is
-  `getFunction().getAChild()` and is one of: `Identifier` (`f(x)`),
-  `MemberExpression` (`a.b(x)` → name is `getProperty()`), `NewExpression`
-  (`new T(x)`), `StructExpression` (`new T{salt: …}()` / `x.call{value: …}(…)`).
-  Robust callee-name resolution: descend `getFunction().getAChild*()` and handle
-  both `Identifier.getValue()` and `MemberExpression.getProperty()...getValue()`.
+- **`CallExpression.getFunction()` returns the real callee directly** — one of
+  `Identifier` (`f(x)`), `MemberExpression` (`a.b(x)` → name is `getProperty()`),
+  `NewExpression` (`new T(x)`), `StructExpression` (`new T{salt: …}()` /
+  `x.call{value: …}(…)`). Callee-name resolution: cast `getFunction()` to
+  `Identifier` (`getValue()`) or `MemberExpression`
+  (`getProperty()...getValue()`). No `getAChild*()` unwrap needed.
   `ql/lib/codeql/solidity/callgraph/CallResolution.qll` is the reference pattern.
-- `CallExpression.getChild(0)` is **unpopulated** (0 results) — use `getAChild()`
-  / `getAFieldOrChild()` / `getFunction()`, not indexed `getChild(i)`.
-- **`Visibility` and `StateMutability` are wrapper nodes too**: the keyword
-  (`public`/`external`/`view`/`pure`/`payable`) is the value of their *child*
-  token, not the node. So `solidity_tokeninfo(visibilityNode, …)` returns nothing;
-  use `wrapper.getAChild().getValue()`. (This was the bug fixed in
-  `Function.qll` on this branch.)
+- Likewise **binary/assignment operands (`getLeft()`/`getRight()`), array index
+  (`getIndex()`), and call-argument values are now the real expression directly**
+  — `CallArgument`'s single child is the argument expression (no inner wrapper).
+  `MemberExpression.getObject()` was never wrapped.
+- Only `expression` is collapsed (single-child, so `#keyset[parent,index]` is
+  preserved). `statement`, `boolean_literal`, `expression_statement`,
+  `parenthesized_expression`, etc. are **not** collapsed.
+- Still wrappers (NOT collapsed): **`Visibility` and `StateMutability`** — the
+  keyword (`public`/`external`/`view`/`pure`/`payable`) is the value of their
+  *child* token, so `solidity_tokeninfo(visibilityNode, …)` is empty; use
+  `wrapper.getAChild().getValue()`. (Bug fixed in `Function.qll` on this branch.)
+- `CallExpression.getChild(i)` is still **dead** — the codegen emits a per-type
+  `getChild` override backed by an unpopulated `solidity_<kind>_child` relation
+  (see Library reliability below). Use `getAChild()` / `getAFieldOrChild()` / the
+  typed field accessors / `getFunction()`, not indexed `getChild(i)`.
 - **Pragma operators** (`^ >= > < <= =`) are plain `AstNode` tokens whose
   `getValue()` has leading whitespace — `.trim()` it. The typed
   `SolidityVersionComparisonOperator` node has **no** `getValue()`. The version
   string lives in `SolidityVersion` nodes.
-- `require`/`assert`/`revert` are `CallExpression`s; the callee `Identifier`'s
-  parent is the wrapper, i.e. `id.getParent() = c.getFunction()`. Argument count =
-  `count(CallArgument a | a.getParent() = c)` — `require(cond)` = 1,
+- `require`/`assert`/`revert` are `CallExpression`s; the callee is
+  `c.getFunction().(Identifier)` directly (its `getValue()` is the name). Argument
+  count = `count(CallArgument a | a.getParent() = c)` — `require(cond)` = 1,
   `require(cond, "msg")` = 2.
 
 ## Library reliability
 
-The convenience helpers in `ql/lib` are uneven — several predate/ignore the
-wrapper-node shape and silently match nothing. Treat them as suspect and verify
-counts against a known corpus before relying on them.
+The convenience helpers in `ql/lib` are uneven — verify counts against a known
+corpus before relying on them.
 
 - Fixed on this branch: `FunctionDef.getVisibility()` / `isView` / `isPure` /
-  `isPayable` (all returned empty due to the wrapper bug).
+  `isPayable` (all returned empty due to the `Visibility`/`StateMutability`
+  wrapper bug — those wrappers are *not* collapsed).
 - Fixed on this branch: `dataflow/TaintTracking.qll`. All sinks/sanitizers
   previously returned **0** from three stacked bugs: (1) `member =
-  call.getFunction()` matched the wrapper, not the `MemberExpression`
-  (→ `getFunction().getAChild*()`); (2) `.getProperty()...toString()` /
-  `Identifier.toString()` return the **QL class name**, not source text
-  (→ `.getValue()`); (3) argument access via `call.getChild(0)` is dead and
-  operands are wrapped (→ unwrap `CallArgument → Expression → expr`; descend
-  operand wrappers). Now firing on Uniswap (ExternalCallTargetSink 9, CallDataSink
-  5, EtherTransferAmountSink 10, StorageWriteSink 154, RequireCheckSanitizer 368,
-  BoundsCheckSanitizer 85, etc.). `ReentrancyGuardSanitizer` left as-is — separate
-  bug (unbound `this`; needs a design decision), documented inline.
-- `callgraph/ExternalCalls.qll` is actually **fine** — it already uses the
-  wrapper-aware `getFunction().getAChild*()` + `getValue()` pattern (`ExternalCall`
-  = 123, `isLowLevelCall`/`isEtherTransfer` = 5 each on Uniswap). The earlier
-  "~3 calls" reading was stale.
-- Root cause of dead `getChild(i)`: codegen (`extractor/src/codegen/mod.rs`
-  `generate_child_accessor`) emits per-type `getChild` **overrides** backed by
-  `solidity_<kind>_child` relations that the extractor (`extractor.rs`) never
-  populates — only `solidity_ast_node_parent` + fields. The override shadows the
-  working base `AstNode.getChild` (which uses the parent relation), so `getChild(i)`
-  is dead for overridden types (CallExpression, CallArgument, …) but works for
-  non-overridden ones (ArrayAccess). Use `getAChild()`/`getAFieldOrChild()` or the
-  typed field accessors instead. (Deliberately not fixed in Rust — repo convention
-  is QL-layer wrapper handling.)
+  call.getFunction()` matched the (then-present) wrapper, not the
+  `MemberExpression`; (2) `.getProperty()...toString()` / `Identifier.toString()`
+  return the **QL class name**, not source text (→ `.getValue()`); (3) argument
+  access via `call.getChild(0)` is dead. Now written against the **collapsed** AST
+  (`getFunction()`/`getLeft()`/`getRight()`/`getIndex()`/`CallArgument` child are
+  the real expression directly) and firing on Uniswap (ExternalCallTargetSink 10,
+  CallDataSink 5, EtherTransferAmountSink 10, StorageWriteSink 154,
+  RequireCheckSanitizer 368, BoundsCheckSanitizer 85, etc.).
+  `ReentrancyGuardSanitizer` left as-is — separate bug (unbound `this`; needs a
+  design decision), documented inline.
+- The `expression` wrapper collapse was done in the **extractor** (see the AST
+  shape section). `getAChild*()`-based callee/operand unwraps in the lib
+  (`CallResolution.qll`, `ExternalCalls.qll`, etc.) still work afterward because
+  `getAChild*()` is reflexive — they are now over-broad but correct. New code
+  should use the direct field accessors.
+- Queries broken by the collapse and fixed on this branch: `CalleeKinds.ql`
+  (`getFunction().getAChild()` → `getFunction()`), `RequireWithoutReason.ql` /
+  `AssertInProductionCode.ql` (the `id.getParent() = c.getFunction()` idiom →
+  `c.getFunction().(Identifier)`). README CalleeKinds prose updated. Documented
+  corpus numbers unchanged (FloatingPragma 29, RequireWithoutReason 107/162,
+  CalleeKinds 1124, AssertInProductionCode 0/151).
+- Still-dead `getChild(i)` (separate, NOT fixed): codegen
+  (`extractor/src/codegen/mod.rs` `generate_child_accessor`) emits per-type
+  `getChild` **overrides** backed by `solidity_<kind>_child` relations that the
+  extractor never populates (only `solidity_ast_node_parent` + fields). The
+  override shadows the working base `AstNode.getChild`, so `getChild(i)` is dead
+  for overridden types (CallExpression, CallArgument, …) but works for
+  non-overridden ones (ArrayAccess). Note: much of `controlflow/` and
+  `dataflow/internal/` leans on `getChild(i)` and so is pre-existingly broken.
 - When unsure, model directly on raw `TreeSitter` following
   `queries/analysis/FunctionList.ql`, which has verified-working
   visibility/mutability/state-access patterns.

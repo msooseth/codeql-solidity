@@ -1,9 +1,9 @@
 /**
  * @name Call callee kinds
  * @description Classifies every call expression by the syntactic kind of its
- *              callee, after unwrapping the grammar's `expression` wrapper node.
- *              Useful for understanding how calls resolve to their targets and
- *              for sanity-checking that call -> callee linking is complete.
+ *              callee. Useful for understanding how calls resolve to their
+ *              targets and for sanity-checking that call -> callee linking is
+ *              complete.
  * @kind problem
  * @problem.severity recommendation
  * @precision high
@@ -16,13 +16,12 @@
 import codeql.solidity.ast.internal.TreeSitter
 
 /**
- * Gets the callee node of `c`, i.e. the inner expression in its `function`
- * position. `CallExpression.getFunction()` returns a generic `expression`
- * wrapper node in this grammar, so we descend one level to the concrete callee
+ * Gets the callee node of `c`, i.e. the expression in its `function` position
  * (an `Identifier` for `f(...)`, a `MemberExpression` for `a.b(...)`, a
- * `NewExpression` for `new T(...)`, etc.).
+ * `NewExpression` for `new T(...)`, etc.). The extractor collapses the grammar's
+ * generic `expression` wrapper, so `getFunction()` is the concrete callee.
  */
-Solidity::AstNode getCallee(Solidity::CallExpression c) { result = c.getFunction().getAChild() }
+Solidity::AstNode getCallee(Solidity::CallExpression c) { result = c.getFunction() }
 
 /** Gets the syntactic kind of `c`'s callee (e.g. `Identifier`, `MemberExpression`). */
 string calleeKind(Solidity::CallExpression c) { result = getCallee(c).getAPrimaryQlClass() }

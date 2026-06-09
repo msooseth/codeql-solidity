@@ -176,10 +176,10 @@ production — a clean bill of health that the query confirms.
 
 ### `CalleeKinds.ql` — how calls resolve to their target
 
-This grammar wraps every expression in a generic `expression` node, so a call's
-`function` field (`CallExpression.getFunction()`) returns that wrapper; the real
-callee is one level down (`getFunction().getAChild()`). This query classifies all
-**1124 call expressions** by that inner callee kind:
+The extractor collapses the grammar's generic `expression` wrapper node, so a
+call's `function` field (`CallExpression.getFunction()`) returns the real callee
+directly. This query classifies all **1124 call expressions** by that callee
+kind:
 
 | Inner callee node  | Count | Example                  |
 |--------------------|------:|--------------------------|
@@ -189,11 +189,10 @@ callee is one level down (`getFunction().getAChild()`). This query classifies al
 | `StructExpression` |     2 | `new T{salt: …}()` deploy |
 
 Every call has a resolvable callee (605 + 487 + 30 + 2 = 1124) — the call→callee
-link is complete; the only subtlety is unwrapping the `expression` wrapper, which
-is why a naïve callee lookup that only matches a direct `Identifier` would silently
-miss the 487 member calls. The library's
-[`CallResolution.qll`](ql/lib/codeql/solidity/callgraph/CallResolution.qll) handles
-this with `getFunction().getAChild*()`.
+link is complete. A naïve callee lookup that only matches a direct `Identifier`
+would still miss the 487 member calls, so resolution must handle both the
+`Identifier` and `MemberExpression` cases (see the library's
+[`CallResolution.qll`](ql/lib/codeql/solidity/callgraph/CallResolution.qll)).
 
 ## Project structure
 

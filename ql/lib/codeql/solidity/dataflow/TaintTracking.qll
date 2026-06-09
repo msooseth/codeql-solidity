@@ -16,41 +16,39 @@ module TaintTracking {
    * Holds if `call` is a member call `obj.prop(...)`, binding the underlying
    * `member` expression and its property name `prop`.
    *
-   * `CallExpression.getFunction()` always returns a generic `Expression` wrapper
-   * (never the callee directly), so the real `MemberExpression` is reached via
-   * `getAChild*()`, and the property name is read with `getValue()` (its
-   * `toString()` yields the QL class name, not the source text).
+   * The extractor collapses the grammar's generic `expression` wrapper, so
+   * `CallExpression.getFunction()` returns the real callee directly. The property
+   * name is read with `getValue()` (its `toString()` yields the QL class name,
+   * not the source text).
    */
   private predicate memberCall(
     Solidity::CallExpression call, Solidity::MemberExpression member, string prop
   ) {
-    member = call.getFunction().getAChild*() and
+    member = call.getFunction() and
     prop = member.getProperty().(Solidity::AstNode).getValue()
   }
 
   /**
-   * Gets the resolved callee name of `call`, unwrapping the `Expression` wrapper
-   * for both plain `f(x)` and member `a.b(x)` calls.
+   * Gets the resolved callee name of `call`, for both plain `f(x)` and member
+   * `a.b(x)` calls.
    */
   private string calleeName(Solidity::CallExpression call) {
-    result = call.getFunction().getAChild*().(Solidity::Identifier).getValue()
+    result = call.getFunction().(Solidity::Identifier).getValue()
     or
     result =
-      call.getFunction().getAChild*().(Solidity::MemberExpression).getProperty().(Solidity::AstNode).getValue()
+      call.getFunction().(Solidity::MemberExpression).getProperty().(Solidity::AstNode).getValue()
   }
 
   /**
    * Gets the value expression of an argument to `call`.
    *
-   * Arguments are `CallArgument` nodes that each wrap their real expression in a
-   * generic `Expression` node, so the value sits two levels down.
-   * (`CallExpression.getChild(i)` is unpopulated and cannot be used.)
+   * Arguments are `CallArgument` nodes whose single child is the argument
+   * expression (the `expression` wrapper is collapsed by the extractor).
    */
   private Solidity::AstNode callArgValue(Solidity::CallExpression call) {
-    exists(Solidity::CallArgument arg, Solidity::AstNode wrapper |
+    exists(Solidity::CallArgument arg |
       arg.getParent() = call and
-      wrapper.getParent() = arg and
-      result.getParent() = wrapper
+      result.getParent() = arg
     )
   }
 
@@ -279,10 +277,10 @@ module TaintTracking {
      */
     class ArrayIndexSink extends DataFlow::Node {
       ArrayIndexSink() {
-        // `getChild(1)` is a bracket token; the index expression is wrapped under
-        // `getIndex()`, so descend one level to the real expression.
+        // The index expression is `getIndex()` directly (the `expression` wrapper
+        // is collapsed by the extractor).
         exists(Solidity::ArrayAccess access |
-          this.asExpr().getParent() = access.getIndex()
+          this.asExpr() = access.getIndex()
         )
       }
     }
@@ -292,17 +290,17 @@ module TaintTracking {
      */
     class StorageWriteSink extends DataFlow::Node {
       StorageWriteSink() {
-        // Assignment operands are wrapped in generic `Expression` nodes: the LHS
-        // identifier is reached via `getAChild*()` and the RHS value is the direct
-        // child of the right wrapper. Names compare with `getValue()`, not
-        // `toString()` (which yields the QL class name).
+        // The RHS value is the (collapsed) right operand. The LHS state variable
+        // is reached via `getAChild*()` since the left operand may be complex
+        // (e.g. `balances[a]`), so the name identifier can be nested. Names
+        // compare with `getValue()`, not `toString()` (which is the QL class name).
         exists(
           Solidity::AssignmentExpression assign, Solidity::StateVariableDeclaration decl,
           Solidity::Identifier id
         |
           id = assign.getLeft().getAChild*() and
           id.getValue() = decl.getName().(Solidity::AstNode).getValue() and
-          this.asExpr().getParent() = assign.getRight()
+          this.asExpr() = assign.getRight()
         )
       }
     }
@@ -314,7 +312,7 @@ module TaintTracking {
       CriticalStateModificationSink() {
         exists(Solidity::AssignmentExpression assign, Solidity::Identifier id |
           id = assign.getLeft().getAChild*() and
-          this.asExpr().getParent() = assign.getRight() and
+          this.asExpr() = assign.getRight() and
           // Look for common critical variable names
           (
             id.getValue().toLowerCase().matches("%owner%") or
@@ -348,26 +346,26 @@ module TaintTracking {
      */
     class OwnerCheckSanitizer extends DataFlow::Node {
       OwnerCheckSanitizer() {
-        // Binary operands are wrapped in generic `Expression` nodes (reach them via
-        // `getAChild*()`), and operator/property/identifier text is read with
-        // `getValue()` rather than `toString()`.
+        // Binary operands are the collapsed `getLeft()`/`getRight()` nodes;
+        // operator/property/identifier text is read with `getValue()` rather than
+        // `toString()`.
         exists(Solidity::BinaryExpression cmp |
           cmp.getOperator().(Solidity::AstNode).getValue() in ["==", "!="] and
           this.asExpr() = cmp and
           (
             // msg.sender == owner pattern
             exists(Solidity::MemberExpression member, Solidity::Identifier id |
-              member = cmp.getLeft().getAChild*() and
+              member = cmp.getLeft() and
               member.getObject().(Solidity::Identifier).getValue() = "msg" and
               member.getProperty().(Solidity::AstNode).getValue() = "sender" and
-              id = cmp.getRight().getAChild*() and
+              id = cmp.getRight() and
               id.getValue().toLowerCase().matches("%owner%")
             )
             or
             exists(Solidity::MemberExpression member, Solidity::Identifier id |
-              id = cmp.getLeft().getAChild*() and
+              id = cmp.getLeft() and
               id.getValue().toLowerCase().matches("%owner%") and
-              member = cmp.getRight().getAChild*() and
+              member = cmp.getRight() and
               member.getObject().(Solidity::Identifier).getValue() = "msg" and
               member.getProperty().(Solidity::AstNode).getValue() = "sender"
             )
@@ -385,7 +383,7 @@ module TaintTracking {
           calleeName(req) = "require" and
           cmp = callArgValue(req) and
           cmp.getOperator().(Solidity::AstNode).getValue() in ["<", "<=", ">", ">="] and
-          this.asExpr().getParent() = cmp.getLeft()
+          this.asExpr() = cmp.getLeft()
         )
       }
     }
