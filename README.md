@@ -94,7 +94,7 @@ codeql query run queries/analysis/FunctionList.ql \
   --database=vault-db --additional-packs="$PWD"
 ```
 
-```
+```markdown
 | function|Vault|withdraw|public|nonpayable||0|2|1|true|false|contracts/Vault.sol:5 |
 ```
 
