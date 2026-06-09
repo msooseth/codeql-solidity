@@ -129,17 +129,37 @@ impl Extractor {
     /// Extract the parse tree to TRAP.
     fn extract_tree(&mut self, tree: &Tree, source: &str) -> Result<()> {
         let root = tree.root_node();
+        // Result ignored: returns None if the root itself is an ERROR node (a
+        // catastrophically unparseable file), in which case nothing is emitted.
         self.extract_node(root, source, None)?;
         Ok(())
     }
 
     /// Extract a single node and its children recursively.
+    ///
+    /// Returns `None` if the node is a tree-sitter synthetic ERROR / MISSING node
+    /// (and is therefore skipped along with its whole subtree), otherwise
+    /// `Some(label)` for the emitted node.
     fn extract_node(
         &mut self,
         node: Node,
         source: &str,
         parent_info: Option<(Label, usize)>,
-    ) -> Result<Label> {
+    ) -> Result<Option<Label>> {
+        // Never emit tree-sitter's synthetic ERROR / zero-width MISSING nodes.
+        // Their kind is "ERROR", which normalize_kind lowercases to "error" and
+        // emits as `solidity_error_def` — a relation absent from the dbscheme
+        // (generated from the grammar's node-types.json, which has no synthetic
+        // ERROR node), which aborts the entire TRAP import. They can appear
+        // anywhere, including as the parse-tree ROOT of a badly-broken file (which
+        // bypasses the child loop below), so the guard lives here in the single
+        // path every node flows through. Dropping the node drops its whole subtree;
+        // the rest of the file still extracts.
+        if node.is_error() || node.is_missing() {
+            self.error_nodes_dropped += 1;
+            return Ok(None);
+        }
+
         // Generate label for this node
         let label = self.trap.fresh_label();
 
@@ -193,7 +213,7 @@ impl Extractor {
         // Process all children and emit field relationships
         self.extract_children_and_fields(&label, node, source)?;
 
-        Ok(label)
+        Ok(Some(label))
     }
 
     /// Extract all children and emit field relationships.
@@ -217,22 +237,17 @@ impl Extractor {
             // relations point at the real expression. See `resolve_wrapper`.
             let child = resolve_wrapper(child);
 
-            // Tree-sitter inserts synthetic ERROR / zero-width MISSING nodes when a
-            // file does not parse cleanly. Their kind is "ERROR", which has no
-            // `solidity_error_def` relation in the dbscheme (the dbscheme is
-            // generated from the grammar's node-types.json, which does not list the
-            // synthetic ERROR node), so emitting them aborts the whole TRAP import.
-            // Drop the error subtree — the rest of the file still extracts. Skipping
-            // here (rather than inside `extract_node`) means no label is created and
-            // no parent/field relation points at a dropped node.
-            if child.is_error() || child.is_missing() {
-                self.error_nodes_dropped += 1;
-                continue;
-            }
-
-            // Extract the child
-            let child_label =
-                self.extract_node(child, source, Some((parent_label.clone(), child_index)))?;
+            // Extract the child. `extract_node` returns None for ERROR / MISSING
+            // nodes (see its guard); skip those entirely so no field relation
+            // points at a dropped node.
+            let child_label = match self.extract_node(
+                child,
+                source,
+                Some((parent_label.clone(), child_index)),
+            )? {
+                Some(label) => label,
+                None => continue,
+            };
 
             // If this child has a field name, emit the field relationship
             if let Some(field_name) = node.field_name_for_child(child_index as u32) {
