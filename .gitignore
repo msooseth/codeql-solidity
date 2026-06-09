@@ -47,3 +47,6 @@ release-manifest.json
 # Sourcify parquet exports (large data, downloaded via sourcify/download_parquet.py)
 *.parquet
 *.parquet.part
+
+# Extracted Solidity sources (output of sourcify/extract_compilation.py), any depth
+sourcify/**/*.sol
